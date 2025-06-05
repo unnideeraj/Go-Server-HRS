@@ -1,0 +1,163 @@
+detect_smuggling(headers, body) — Purpose
+
+This function inspects the HTTP request’s headers and body to determine if the request exhibits characteristics of HTTP Request Smuggling (HRS) attacks.
+It returns a tuple:
+
+    (True, reason) if a smuggling attempt is detected
+
+    (False, '') if the request appears safe
+
+Step-by-Step Breakdown
+1. Normalize Header Names
+
+python
+header_names = [k.lower() for k in headers.keys()]
+te_headers = [k for k in headers.keys() if k.lower() == 'transfer-encoding']
+cl_headers = [k for k in headers.keys() if k.lower() == 'content-length']
+
+    Converts all header names to lowercase for case-insensitive matching.
+
+    Collects all Transfer-Encoding and Content-Length headers (even if duplicates exist).
+
+2. Detect CL.TE or TE.CL Attacks
+
+python
+if te_headers and cl_headers:
+    te_value = headers[te_headers[0]].lower()
+    cl_value = headers[cl_headers[0]]
+    if 'chunked' in te_value:
+        # Check for CL.TE or TE.CL
+        return True, f'Both Content-Length ({cl_value}) and Transfer-Encoding ({te_value}) headers present.'
+
+    Why?
+    If both Content-Length and Transfer-Encoding: chunked are present, different servers might interpret the request differently, enabling smuggling.
+
+    What happens?
+    If both are present, detection is triggered and the reason is returned.
+
+3. Detect Multiple TE or CL Headers (TE.TE, CL.CL)
+
+python
+if len(te_headers) > 1 or len(cl_headers) > 1:
+    return True, 'Multiple Transfer-Encoding or Content-Length headers detected.'
+
+    Why?
+    Multiple headers of the same type can confuse parsers and are often used in advanced smuggling techniques.
+
+    What happens?
+    If more than one Transfer-Encoding or Content-Length header is found, detection is triggered.
+
+4. Detect Obfuscated TE/CL Headers
+
+python
+for raw_header in headers:
+    if TE_OBFUSCATED.match(raw_header):
+        return True, f'Obfuscated Transfer-Encoding header: {raw_header}'
+    if CL_OBFUSCATED.match(raw_header):
+        return True, f'Obfuscated Content-Length header: {raw_header}'
+
+    Why?
+    Attackers may use non-standard header names (e.g., Transfer_Encoding, Content-Length ) to bypass naive filters.
+
+    What happens?
+    If a header matches the obfuscated pattern, detection is triggered.
+
+5. Detect Malformed TE or CL Values
+a. Transfer-Encoding Value Checks
+
+python
+if te_headers:
+    te_value = headers[te_headers[0]].strip().lower()
+    if te_value not in ['chunked', 'identity', '']:
+        return True, f'Unusual Transfer-Encoding value: {te_value}'
+    # Check for chunked body format if chunked
+    if te_value == 'chunked' and not body.endswith(b'0\r\n\r\n'):
+        return True, 'Transfer-Encoding chunked without proper chunked body ending.'
+
+    Why?
+
+        Only chunked and identity are valid values per RFC.
+
+        If the value is something else, it’s suspicious.
+
+        If chunked, the body must end with 0\r\n\r\n (end of chunks).
+
+    What happens?
+
+        Flags unusual values.
+
+        Flags chunked encoding bodies that aren’t properly terminated.
+
+b. Content-Length Value Checks
+
+python
+if cl_headers:
+    try:
+        cl_value = int(headers[cl_headers[0]].strip())
+        if cl_value != len(body):
+            return True, f'Content-Length mismatch: header={cl_value}, actual={len(body)}'
+    except Exception:
+        return True, f'Invalid Content-Length value: {headers[cl_headers[0]]}'
+
+    Why?
+
+        The actual body length should match the Content-Length header.
+
+        Non-integer or malformed values are suspicious.
+
+    What happens?
+
+        Flags mismatches and invalid values.
+
+6. Detect Conflicting TE Values
+
+python
+if te_headers:
+    te_value = headers[te_headers[0]].lower()
+    if ',' in te_value and 'chunked' in te_value and 'identity' in te_value:
+        return True, f'Conflicting Transfer-Encoding values: {te_value}'
+
+    Why?
+
+        Having both chunked and identity in the same header is not valid and can be abused.
+
+    What happens?
+
+        Flags conflicting values.
+
+7. Non-standard Line Endings or Header Delimiters
+
+python
+# Not directly visible via headers dict, but can be checked in raw request parsing (advanced)
+
+    Why?
+
+        CRLF injection and non-standard delimiters can be used for smuggling, but are not directly visible in the parsed headers.
+
+    What happens?
+
+        Not checked here, but noted for further (advanced) improvements.
+
+8. Default: No Smuggling Detected
+
+python
+return False, ''
+
+    If none of the checks above are triggered, the request is considered safe.
+
+Summary Table
+Attack Type	Detection Logic
+CL.TE / TE.CL	Both Content-Length and Transfer-Encoding present
+TE.TE / CL.CL	Multiple Transfer-Encoding or Content-Length headers
+Header Obfuscation	Regex matches for non-standard header names
+Malformed Values	Invalid or suspicious TE/CL values, chunked body not properly terminated
+Conflicting TE Values	Both chunked and identity in Transfer-Encoding
+Content-Length Mismatch	Body length does not match Content-Length header
+Non-standard Delimiters	Not implemented in this version (requires raw request inspection)
+In Summary
+
+    The function systematically checks for all known HTTP Request Smuggling vectors.
+
+    It returns a detection flag and a human-readable reason for logging and response.
+
+    This modular approach makes it easy to add more checks as new attack vectors emerge.
