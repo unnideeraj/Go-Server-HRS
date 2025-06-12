@@ -1,0 +1,61 @@
+How to Integrate Your Python WAF with RabbitMQ
+
+To integrate your Python WAF for HRS attack detection with RabbitMQ, you need to set up your code to consume messages (HTTP requests or logs) from a RabbitMQ queue, process them using your WAF logic, and optionally send results or alerts back to another queue.
+1. Set Up RabbitMQ Connection in Python
+
+You can use popular libraries like pika or amqpstorm to connect to RabbitMQ from Python
+
+.
+
+Example using pika:
+
+python
+import pika
+
+# Connect to RabbitMQ server
+connection = pika.BlockingConnection(pika.ConnectionParameters('localhost'))
+channel = connection.channel()
+
+# Declare the queue (ensure it exists)
+channel.queue_declare(queue='waf_queue', durable=True)
+
+2. Consume Messages from the Queue
+
+Define a callback function to process each message (i.e., HTTP request data) with your WAF logic.
+
+python
+def waf_callback(ch, method, properties, body):
+    # Here, 'body' contains the HTTP request data
+    # Process using your WAF logic (e.g., HRS detection)
+    result = detect_hrs_attack(body)
+    if result['malicious']:
+        print("Attack detected:", result['details'])
+        # Optionally, send alert or block action
+    ch.basic_ack(delivery_tag=method.delivery_tag)
+
+channel.basic_qos(prefetch_count=1)
+channel.basic_consume(queue='waf_queue', on_message_callback=waf_callback)
+print(' [*] Waiting for messages. To exit press CTRL+C')
+channel.start_consuming()
+
+3. Implement Your WAF Logic
+
+You can use or adapt open-source Python tools for HTTP Request Smuggling detection, such as the one described on GitHub
+
+. Integrate this logic inside your callback function.
+4. (Optional) Publish Results or Alerts
+
+If you want to send alerts or processed results to another queue:
+
+python
+channel.basic_publish(
+    exchange='',
+    routing_key='alerts_queue',
+    body='Attack detected!'
+)
+
+5. Example Workflow
+Step	Component	Action
+1. HTTP request	Producer (web server)	Sends request data to RabbitMQ queue
+2. WAF processing	Consumer (your code)	Consumes from queue, applies WAF logic
+3. Alert/response	Producer (your code)	Publishes result to another queue (optional)
